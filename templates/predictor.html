@@ -1,0 +1,161 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="dark-app">
+  <aside class="side">
+    <h2>Your Details</h2>
+
+    <label class="s-label">Search By</label>
+    <div class="radio-row">
+      <label><input type="radio" name="mode" value="percentile" checked onchange="modeChanged()"> Percentile</label>
+      <label><input type="radio" name="mode" value="rank" onchange="modeChanged()"> Rank</label>
+    </div>
+
+    <label class="s-label" id="value-label">Your MH-CET Percentile</label>
+    <div class="num-wrap">
+      <input type="number" id="value" value="90.0000" step="0.01" min="0">
+      <button type="button" onclick="stepVal(-1)">−</button>
+      <button type="button" onclick="stepVal(1)">+</button>
+    </div>
+
+    <label class="s-label">Gender / Seat Type <span class="q2" title="Ladies seats are female-only. Female candidates can also select Gender-Neutral. 'Any' shows special codes (PWD/DEF/EWS/TFWS).">?</span></label>
+    <select id="gender">
+      <option>Gender-Neutral</option>
+      <option>Female (Ladies)</option>
+      <option>Any</option>
+    </select>
+
+    <label class="s-label">Category</label>
+    <select id="category">
+      {% for c in categories %}<option {% if c=='OPEN' %}selected{% endif %}>{{ c }}</option>{% endfor %}
+    </select>
+
+    <label class="s-label">Branch (select one or more) <span class="q2" title="Leave empty to include all branches.">?</span></label>
+    <select id="branches" multiple size="5">
+      {% for b in branches %}<option>{{ b }}</option>{% endfor %}
+    </select>
+    <span class="s-hint">Empty = All Branches. Ctrl/Cmd-click for multiple.</span>
+
+    <label class="s-label">Quota</label>
+    <select id="quota">
+      <option>All Quotas</option>
+      {% for q in quotas %}<option>{{ q }}</option>{% endfor %}
+    </select>
+
+    <label class="s-label">District (select one or more) <span class="q2" title="Leave empty to include all districts.">?</span></label>
+    <select id="districts" multiple size="5">
+      {% for d in districts %}<option>{{ d }}</option>{% endfor %}
+    </select>
+    <span class="s-hint">Empty = All Districts.</span>
+
+    <button class="btn-predict" onclick="predict()">🔍 Predict Colleges</button>
+  </aside>
+
+  <main class="main">
+    <h1 class="d-title">🎓 MH-CET College Predictor</h1>
+    <p class="d-sub">Enter your percentile and filters to see which colleges you can get.</p>
+
+    <div id="info" class="d-info">Set your details in the sidebar, then click <b>Predict Colleges</b>.</div>
+    <div id="loading" class="d-info" style="display:none">Crunching cutoffs…</div>
+    <div id="error" class="d-warn" style="display:none"></div>
+
+    <div id="results" style="display:none">
+      <div class="metric-row">
+        <div class="metric"><span>Total Options</span><b id="m-total"></b></div>
+        <div class="metric"><span>Priority Options</span><b id="m-prio"></b></div>
+        <div class="metric"><span id="m-counter-label"></span><b id="m-counter"></b></div>
+        <div class="metric"><span>Dream / Target / Safe</span><b id="m-types"></b></div>
+      </div>
+      <div class="d-table-wrap">
+        <table class="d-table">
+          <thead><tr>
+            <th></th><th>Priority</th><th>Institute Code</th><th>Institute Name</th>
+            <th>District</th><th>Course Name</th><th>Category</th><th>Quota</th>
+            <th>Cutoff Percentile</th><th>Cutoff Rank</th><th>College Type</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <button class="btn-predict wide" onclick="downloadPdf()">📄 Download PDF Report</button>
+    </div>
+  </main>
+</div>
+
+<script>
+function modeChanged(){
+  const m = document.querySelector('input[name=mode]:checked').value;
+  const lbl = document.getElementById('value-label');
+  const inp = document.getElementById('value');
+  if (m === 'rank'){ lbl.textContent = 'Your MH-CET Merit Rank';
+    inp.step = 100; inp.value = 10000; }
+  else { lbl.textContent = 'Your MH-CET Percentile';
+    inp.step = 0.01; inp.value = '90.0000'; }
+}
+function stepVal(dir){
+  const inp = document.getElementById('value');
+  const step = parseFloat(inp.step) || 1;
+  inp.value = (parseFloat(inp.value || 0) + dir * step).toFixed(
+    inp.step === '0.01' ? 4 : 0);
+}
+function multi(id){ return [...document.getElementById(id).selectedOptions].map(o=>o.value); }
+function payload(){
+  return {
+    mode: document.querySelector('input[name=mode]:checked').value,
+    value: document.getElementById('value').value,
+    gender: document.getElementById('gender').value,
+    category: document.getElementById('category').value,
+    branches: multi('branches'),
+    quota: document.getElementById('quota').value,
+    districts: multi('districts')
+  };
+}
+const TYPE_COLORS = {"Dream College":"#ef5350","Target College":"#ffb74d","Safe College":"#66bb6a"};
+async function predict(){
+  const err = document.getElementById('error'), res = document.getElementById('results');
+  document.getElementById('info').style.display='none';
+  err.style.display='none'; res.style.display='none';
+  document.getElementById('loading').style.display='block';
+  const r = await fetch('/api/predict', {method:'POST',
+    headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload())});
+  const out = await r.json();
+  document.getElementById('loading').style.display='none';
+  if (out.error){ err.textContent = out.error; err.style.display='block'; return; }
+  if (!out.results.length){
+    err.textContent = 'No colleges found for these filters. Try a different category, branch, or quota.';
+    err.style.display='block'; return;
+  }
+  document.getElementById('m-total').textContent = out.results.length;
+  document.getElementById('m-prio').textContent = out.priority_count;
+  document.getElementById('m-counter-label').textContent = out.counter_label;
+  document.getElementById('m-counter').textContent = out.counter_value;
+  const t = out.type_counts;
+  document.getElementById('m-types').textContent = `${t.dream} / ${t.target} / ${t.safe}`;
+  const tb = document.querySelector('.d-table tbody'); tb.innerHTML='';
+  out.results.forEach((x, i) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td class="idx">${i+1}</td>
+      <td class="star">${x.priority ? '⭐' : ''}</td>
+      <td>${x.code}</td>
+      <td class="inst">${x.institute}</td>
+      <td>${x.district}</td>
+      <td>${x.course}</td>
+      <td>${x.seat_code}</td>
+      <td class="quota">${x.quota}</td>
+      <td>${x.cutoff_pct.toFixed(4)}</td>
+      <td>${x.cutoff_rank ? x.cutoff_rank.toLocaleString() : '-'}</td>
+      <td style="color:${TYPE_COLORS[x.college_type]};font-weight:700">${x.college_type}</td>`;
+    tb.appendChild(tr);
+  });
+  res.style.display='block';
+}
+async function downloadPdf(){
+  const r = await fetch('/api/report', {method:'POST',
+    headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload())});
+  if (!r.ok){ alert('Could not generate PDF.'); return; }
+  const blob = await r.blob();
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'MHCET_Prediction_Report.pdf';
+  a.click();
+}
+</script>
+{% endblock %}

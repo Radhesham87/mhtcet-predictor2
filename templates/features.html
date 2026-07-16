@@ -7,7 +7,10 @@
   <p class="hero-sub">Predict MHT CET 2026 colleges by rank or percentile. Our engine calculates
      Smart Score, Admission Probability %, Safety Zones, Cutoff Volatility, and
      Year-over-Year trend for the most accurate predictions.</p>
-  <a class="btn-cta" href="{{ url_for('predictor') }}">🔮 Start Prediction</a>
+  <div class="hero-cta-row">
+    <a class="btn-cta" href="{{ url_for('predictor') }}">🔮 MH-CET Prediction</a>
+    <a class="btn-cta btn-cta-alt" href="{{ url_for('jee_predictor') }}">🚀 JEE-Main Prediction</a>
+  </div>
   <div class="hero-stats">
     <div><b>{{ '{:,}'.format(stats.rows) }}</b><span>Cutoff Records</span></div>
     <div><b>{{ stats.institutes }}</b><span>Institutes</span></div>

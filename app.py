@@ -36,6 +36,12 @@ DEFAULT_CSV = os.path.join(DATA_DIR, "cutoff_data.csv.gz")
 # than xlsx (important on 512MB hosts). Admin xlsx uploads still work.
 DEFAULT_DATA = DEFAULT_CSV if os.path.exists(DEFAULT_CSV) else DEFAULT_XLSX
 
+# JEE Main (Maharashtra) dataset - separate predictor
+JEE_DATA = os.path.join(DATA_DIR, "JEE_Main_Maharashtra.xlsx")
+JEE_PCT_BELOW = 20.0   # show colleges down to  percentile - JEE_PCT_BELOW
+JEE_PCT_ABOVE = 2.0    # include dream colleges up to  percentile + JEE_PCT_ABOVE
+_JEE_CACHE = {"path": None, "mtime": None, "df": None}
+
 DEFAULT_ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@mhtcet.local")
 DEFAULT_ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
 
@@ -354,15 +360,10 @@ def run_college_list(form):
         return {"results": [], "priority_count": 0,
                 "institute_count": 0, "district_count": 0}
 
-<<<<<<< HEAD
     # top-to-bottom (best college first) ordered by the dataset's
     # cutoff percentile, then by cutoff rank as a tie-breaker
     d = d.sort_values(["Cutoff Percentile", "Cutoff Rank"],
                       ascending=[False, True], na_position="last").copy()
-=======
-    # top-to-bottom: highest cutoff percentile first
-    d = d.sort_values("Cutoff Percentile", ascending=False).copy()
->>>>>>> e43281de2fdd9fe8e5a8b5f201c4b57101cbff8c
 
     results = []
     for _, r in d.iterrows():
@@ -383,6 +384,114 @@ def run_college_list(form):
             "priority_count": sum(1 for r in results if r["priority"]),
             "institute_count": int(d["Institute Name"].nunique()),
             "district_count": int(d["District"].nunique())}
+
+
+# ------------------------------------------------------------ JEE Main
+def load_jee_data() -> pd.DataFrame:
+    """Load & cache the JEE Main (Maharashtra) cutoff sheet."""
+    if not os.path.exists(JEE_DATA):
+        return pd.DataFrame()
+    mtime = os.path.getmtime(JEE_DATA)
+    if _JEE_CACHE["path"] == JEE_DATA and _JEE_CACHE["mtime"] == mtime:
+        return _JEE_CACHE["df"]
+
+    df = pd.read_excel(JEE_DATA, sheet_name=0)
+    df.columns = [c.strip() for c in df.columns]
+    # numeric cleanup - Merit (rank) may contain thousands separators
+    df["Merit"] = pd.to_numeric(
+        df["Merit"].astype(str).str.replace(",", "").str.strip(),
+        errors="coerce")
+    df["Percentile"] = pd.to_numeric(df["Percentile"], errors="coerce")
+    df = df.dropna(subset=["Percentile", "Merit"])
+    df = df[df["Branch Name"].astype(str).str.strip() != "-"]
+    df["Branch Name"] = df["Branch Name"].astype(str).str.strip()
+    df["College Name"] = df["College Name"].astype(str).str.strip()
+    _JEE_CACHE.update({"path": JEE_DATA, "mtime": mtime, "df": df})
+    return df
+
+
+def jee_pct_from_rank(df, r):
+    pairs = df[["Percentile", "Merit"]].dropna()
+    if pairs.empty:
+        return None
+    nearest = pairs.iloc[(pairs["Merit"] - r).abs().argsort()[:15]]
+    return float(nearest["Percentile"].median())
+
+
+def jee_rank_from_pct(df, p):
+    pairs = df[["Percentile", "Merit"]].dropna()
+    if pairs.empty:
+        return None
+    nearest = pairs.iloc[(pairs["Percentile"] - p).abs().argsort()[:15]]
+    return int(nearest["Merit"].median())
+
+
+def run_jee_prediction(form):
+    df = load_jee_data()
+    if df.empty:
+        return {"error": "JEE Main dataset is not available."}
+
+    mode = form.get("mode", "percentile")
+    if mode == "rank":
+        rank_in = int(float(form.get("value") or 0))
+        if rank_in <= 0:
+            return {"error": "Enter a valid rank."}
+        percentile = jee_pct_from_rank(df, rank_in)
+        entered = f"Rank {rank_in:,}"
+        counter_label = "Your Approx. Percentile"
+        counter_value = f"~{percentile:.2f}" if percentile is not None else "N/A"
+    else:
+        percentile = float(form.get("value") or -1)
+        if not 0 <= percentile <= 100:
+            return {"error": "Enter a valid percentile (0-100)."}
+        est = jee_rank_from_pct(df, percentile)
+        entered = f"Percentile {percentile}"
+        counter_label = "Your Approx. Merit Rank"
+        counter_value = f"~{est:,}" if est else "N/A"
+
+    branches = form.get("branches") or []
+    d = df
+    if branches:
+        d = d[d["Branch Name"].isin(branches)]
+
+    lo, hi = percentile - JEE_PCT_BELOW, percentile + JEE_PCT_ABOVE
+    d = d[d["Percentile"].between(lo, hi)].copy()
+
+    if d.empty:
+        return {"entered": entered, "counter_label": counter_label,
+                "counter_value": counter_value, "results": [],
+                "type_counts": {"dream": 0, "target": 0, "safe": 0}}
+
+    def classify(cut):
+        if cut > percentile:
+            return "Dream College"
+        if cut >= percentile - 1:
+            return "Target College"
+        return "Safe College"
+
+    d["college_type"] = d["Percentile"].map(classify)
+    # top-to-bottom (best first): highest percentile, then best (lowest) rank
+    d = d.sort_values(["Percentile", "Merit"],
+                      ascending=[False, True]).copy()
+
+    results = []
+    for _, r in d.iterrows():
+        results.append({
+            "code": int(r["College Code"]),
+            "college": str(r["College Name"]),
+            "branch": str(r["Branch Name"]),
+            "cutoff_pct": round(float(r["Percentile"]), 4),
+            "cutoff_rank": int(r["Merit"]),
+            "college_type": r["college_type"],
+        })
+
+    tc = d["college_type"].value_counts().to_dict()
+    return {"entered": entered, "counter_label": counter_label,
+            "counter_value": counter_value,
+            "type_counts": {"dream": tc.get("Dream College", 0),
+                            "target": tc.get("Target College", 0),
+                            "safe": tc.get("Safe College", 0)},
+            "results": results}
 
 
 # ----------------------------------------------------------------- auth
@@ -744,6 +853,133 @@ def build_list_pdf(out, payload):
         if r["priority"]:
             cmds.append(("BACKGROUND", (0, i), (-1, i),
                          colors.HexColor("#fff3cd")))
+    table.setStyle(TableStyle(cmds))
+    story.append(table)
+    doc.build(story)
+    return buf.getvalue()
+
+
+# --------------------------------------------------------- JEE Main pages
+@app.route("/jee")
+@login_required
+def jee_predictor():
+    df = load_jee_data()
+    branches = (sorted(df["Branch Name"].dropna().unique())
+                if not df.empty else [])
+    return render_template("jee_predictor.html", branches=branches)
+
+
+@app.route("/api/jee-predict", methods=["POST"])
+@login_required
+def api_jee_predict():
+    payload = request.get_json(force=True)
+    return jsonify(run_jee_prediction(payload))
+
+
+@app.route("/api/jee-report", methods=["POST"])
+@login_required
+def api_jee_report():
+    payload = request.get_json(force=True)
+    out = run_jee_prediction(payload)
+    if out.get("error") or not out.get("results"):
+        return jsonify({"error": out.get("error",
+                                         "No results to export.")}), 400
+    pdf = build_jee_pdf(out, payload)
+    fname = f"JEE_Main_Prediction_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+    return send_file(io.BytesIO(pdf), mimetype="application/pdf",
+                     as_attachment=True, download_name=fname)
+
+
+def build_jee_pdf(out, payload):
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4,
+                            leftMargin=14 * mm, rightMargin=14 * mm,
+                            topMargin=14 * mm, bottomMargin=14 * mm)
+    styles = getSampleStyleSheet()
+    cell = ParagraphStyle("cell", parent=styles["Normal"], fontSize=8,
+                          leading=10)
+    head = ParagraphStyle("head", parent=styles["Normal"], fontSize=8.5,
+                          leading=10, textColor=colors.white,
+                          fontName="Helvetica-Bold")
+
+    student_name = (payload.get("name") or "").strip() or "-"
+    if payload.get("mode") == "rank":
+        score_label = "Merit Rank"
+        try:
+            score_value = f"{int(float(payload.get('value') or 0)):,}"
+        except (TypeError, ValueError):
+            score_value = str(payload.get("value") or "-")
+    else:
+        score_label = "Percentile"
+        try:
+            score_value = f"{float(payload.get('value') or 0):g}"
+        except (TypeError, ValueError):
+            score_value = str(payload.get("value") or "-")
+    branches = payload.get("branches") or []
+    branches_txt = (", ".join(branches[:10])
+                    + (f" … (+{len(branches) - 10} more)"
+                       if len(branches) > 10 else "")) if branches \
+        else "All Branches"
+
+    lbl = ParagraphStyle("lbl", parent=styles["Normal"], fontSize=9,
+                         leading=11, fontName="Helvetica-Bold",
+                         textColor=colors.HexColor("#1f4e79"))
+    val = ParagraphStyle("val", parent=styles["Normal"], fontSize=9,
+                         leading=11)
+    details = Table([
+        [Paragraph("Name", lbl), Paragraph(student_name, val),
+         Paragraph(score_label, lbl), Paragraph(score_value, val)],
+        [Paragraph("Branches", lbl), Paragraph(branches_txt, val),
+         Paragraph(out["counter_label"], lbl),
+         Paragraph(str(out["counter_value"]), val)],
+    ], colWidths=[24 * mm, 78 * mm, 32 * mm, 48 * mm])
+    details.setStyle(TableStyle([
+        ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#c9d6e5")),
+        ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#eef3f8")),
+        ("BACKGROUND", (2, 0), (2, -1), colors.HexColor("#eef3f8")),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+    ]))
+
+    story = [
+        Paragraph("JEE Main (Maharashtra) College Predictor Report",
+                  styles["Title"]),
+        Spacer(1, 3 * mm),
+        details,
+        Spacer(1, 4 * mm),
+        Paragraph(
+            f"Options: <b>{len(out['results'])}</b> | "
+            f"Sorted best-first by percentile & rank | "
+            f"Generated: {datetime.now().strftime('%d %b %Y, %I:%M %p')}",
+            styles["Normal"]),
+        Spacer(1, 6 * mm)]
+
+    headers = ["Sr.No", "College Code", "College Name", "Branch Name",
+               "Cutoff Percentile", "Merit Rank", "College Type"]
+    data = [[Paragraph(h, head) for h in headers]]
+    for i, r in enumerate(out["results"], 1):
+        data.append([
+            Paragraph(str(i), cell),
+            Paragraph(str(r["code"]), cell),
+            Paragraph(r["college"], cell),
+            Paragraph(r["branch"], cell),
+            Paragraph(f"{r['cutoff_pct']:.4f}", cell),
+            Paragraph(f"{r['cutoff_rank']:,}", cell),
+            Paragraph(r["college_type"], cell)])
+    table = Table(data, colWidths=[12 * mm, 20 * mm, 56 * mm, 46 * mm,
+                                   22 * mm, 18 * mm, 22 * mm],
+                  repeatRows=1)
+    type_bg = {"Dream College": colors.HexColor("#fde2e1"),
+               "Target College": colors.HexColor("#fff3cd"),
+               "Safe College": colors.HexColor("#e3f4e4")}
+    cmds = [("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1f4e79")),
+            ("GRID", (0, 0), (-1, -1), 0.4, colors.grey),
+            ("VALIGN", (0, 0), (-1, -1), "TOP")]
+    for i, r in enumerate(out["results"], 1):
+        cmds.append(("BACKGROUND", (6, i), (6, i),
+                     type_bg.get(r["college_type"], colors.white)))
     table.setStyle(TableStyle(cmds))
     story.append(table)
     doc.build(story)

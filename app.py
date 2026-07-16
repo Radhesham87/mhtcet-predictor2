@@ -458,13 +458,53 @@ def build_pdf(out, payload):
     head = ParagraphStyle("head", parent=styles["Normal"], fontSize=8,
                           leading=10, textColor=colors.white,
                           fontName="Helvetica-Bold")
+
+    # ---- candidate details block: Name / Percentile or Merit Rank /
+    #      Category / Gender ----
+    student_name = (payload.get("name") or "").strip() or "-"
+    if payload.get("mode") == "rank":
+        score_label = "Merit Rank"
+        try:
+            score_value = f"{int(float(payload.get('value') or 0)):,}"
+        except (TypeError, ValueError):
+            score_value = str(payload.get("value") or "-")
+    else:
+        score_label = "Percentile"
+        try:
+            score_value = f"{float(payload.get('value') or 0):g}"
+        except (TypeError, ValueError):
+            score_value = str(payload.get("value") or "-")
+    category = payload.get("category") or "-"
+    gender = payload.get("gender") or "-"
+
+    lbl = ParagraphStyle("lbl", parent=styles["Normal"], fontSize=9,
+                         leading=11, fontName="Helvetica-Bold",
+                         textColor=colors.HexColor("#1f4e79"))
+    val = ParagraphStyle("val", parent=styles["Normal"], fontSize=9,
+                         leading=11)
+    details = Table([
+        [Paragraph("Name", lbl), Paragraph(student_name, val),
+         Paragraph(score_label, lbl), Paragraph(score_value, val)],
+        [Paragraph("Category", lbl), Paragraph(category, val),
+         Paragraph("Gender", lbl), Paragraph(gender, val)],
+    ], colWidths=[28 * mm, 92 * mm, 30 * mm, 65 * mm])
+    details.setStyle(TableStyle([
+        ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#c9d6e5")),
+        ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#eef3f8")),
+        ("BACKGROUND", (2, 0), (2, -1), colors.HexColor("#eef3f8")),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+    ]))
+
     story = [
         Paragraph("MHT-CET College Predictor Report", styles["Title"]),
+        Spacer(1, 3 * mm),
+        details,
+        Spacer(1, 4 * mm),
         Paragraph(
-            f"Entered: <b>{out['entered']}</b> "
-            f"({out['counter_label']}: {out['counter_value']}) | "
-            f"Category: <b>{payload.get('category')}</b> | "
-            f"Gender: <b>{payload.get('gender')}</b> | "
+            f"{out['counter_label']}: <b>{out['counter_value']}</b> | "
             f"Options: <b>{len(out['results'])}</b> | "
             f"Generated: {datetime.now().strftime('%d %b %Y, %I:%M %p')} | "
             f"* = priority institute", styles["Normal"]),

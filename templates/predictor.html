@@ -4,6 +4,9 @@
   <aside class="side">
     <h2>Your Details</h2>
 
+    <label class="s-label">Enter Your Name</label>
+    <input type="text" id="student-name" class="name-input" placeholder="Your full name" autocomplete="name">
+
     <label class="s-label">Search By</label>
     <div class="radio-row">
       <label><input type="radio" name="mode" value="percentile" checked onchange="modeChanged()"> Percentile</label>
@@ -30,10 +33,20 @@
     </select>
 
     <label class="s-label">Branch (select one or more) <span class="q2" title="Leave empty to include all branches.">?</span></label>
-    <select id="branches" multiple size="5">
-      {% for b in branches %}<option>{{ b }}</option>{% endfor %}
-    </select>
-    <span class="s-hint">Empty = All Branches. Ctrl/Cmd-click for multiple.</span>
+    <div class="chk-group" id="branches">
+      <input type="text" class="chk-search" placeholder="Search branches…" oninput="filterChecks('branches', this.value)">
+      <div class="chk-tools">
+        <button type="button" onclick="setAllChecks('branches', true)">Select all</button>
+        <button type="button" onclick="setAllChecks('branches', false)">Clear</button>
+        <span class="chk-count" id="branches-count">0 selected</span>
+      </div>
+      <div class="chk-list">
+        {% for b in branches %}
+        <label class="chk-item"><input type="checkbox" value="{{ b }}" onchange="updateCount('branches')"><span>{{ b }}</span></label>
+        {% endfor %}
+      </div>
+    </div>
+    <span class="s-hint">Empty = All Branches. Tick one or more.</span>
 
     <label class="s-label">Quota</label>
     <select id="quota">
@@ -42,10 +55,20 @@
     </select>
 
     <label class="s-label">District (select one or more) <span class="q2" title="Leave empty to include all districts.">?</span></label>
-    <select id="districts" multiple size="5">
-      {% for d in districts %}<option>{{ d }}</option>{% endfor %}
-    </select>
-    <span class="s-hint">Empty = All Districts.</span>
+    <div class="chk-group" id="districts">
+      <input type="text" class="chk-search" placeholder="Search districts…" oninput="filterChecks('districts', this.value)">
+      <div class="chk-tools">
+        <button type="button" onclick="setAllChecks('districts', true)">Select all</button>
+        <button type="button" onclick="setAllChecks('districts', false)">Clear</button>
+        <span class="chk-count" id="districts-count">0 selected</span>
+      </div>
+      <div class="chk-list">
+        {% for d in districts %}
+        <label class="chk-item"><input type="checkbox" value="{{ d }}" onchange="updateCount('districts')"><span>{{ d }}</span></label>
+        {% endfor %}
+      </div>
+    </div>
+    <span class="s-hint">Empty = All Districts. Tick one or more.</span>
 
     <button class="btn-predict" onclick="predict()">🔍 Predict Colleges</button>
   </aside>
@@ -96,9 +119,29 @@ function stepVal(dir){
   inp.value = (parseFloat(inp.value || 0) + dir * step).toFixed(
     inp.step === '0.01' ? 4 : 0);
 }
-function multi(id){ return [...document.getElementById(id).selectedOptions].map(o=>o.value); }
+function multi(id){
+  return [...document.querySelectorAll('#'+id+' input[type=checkbox]:checked')].map(c=>c.value);
+}
+function updateCount(id){
+  const n = document.querySelectorAll('#'+id+' input[type=checkbox]:checked').length;
+  document.getElementById(id+'-count').textContent = n + ' selected';
+}
+function setAllChecks(id, state){
+  document.querySelectorAll('#'+id+' .chk-item').forEach(item => {
+    if (item.style.display !== 'none') item.querySelector('input').checked = state;
+  });
+  updateCount(id);
+}
+function filterChecks(id, q){
+  q = q.trim().toLowerCase();
+  document.querySelectorAll('#'+id+' .chk-item').forEach(item => {
+    const txt = item.textContent.trim().toLowerCase();
+    item.style.display = txt.includes(q) ? 'flex' : 'none';
+  });
+}
 function payload(){
   return {
+    name: document.getElementById('student-name').value,
     mode: document.querySelector('input[name=mode]:checked').value,
     value: document.getElementById('value').value,
     gender: document.getElementById('gender').value,

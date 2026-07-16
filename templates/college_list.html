@@ -1,0 +1,167 @@
+{% extends "base.html" %}
+{% block title %}MHT-CET College List{% endblock %}
+{% block content %}
+<div class="dark-app">
+  <aside class="side">
+    <h2>Your Details 0.2</h2>
+
+    <label class="s-label">Gender / Seat Type <span class="q2" title="Ladies seats are female-only. Female candidates can also select Gender-Neutral. 'Any' shows special codes (PWD/DEF/EWS/TFWS).">?</span></label>
+    <select id="gender">
+      <option>Gender-Neutral</option>
+      <option>Female (Ladies)</option>
+      <option>Any</option>
+    </select>
+
+    <label class="s-label">Category</label>
+    <select id="category">
+      {% for c in categories %}<option {% if c=='OPEN' %}selected{% endif %}>{{ c }}</option>{% endfor %}
+    </select>
+
+    <label class="s-label">Branch (select one or more) <span class="q2" title="Tick at least one branch or district to generate the list.">?</span></label>
+    <div class="chk-group" id="branches">
+      <input type="text" class="chk-search" placeholder="Search branches…" oninput="filterChecks('branches', this.value)">
+      <div class="chk-tools">
+        <button type="button" onclick="setAllChecks('branches', true)">Select all</button>
+        <button type="button" onclick="setAllChecks('branches', false)">Clear</button>
+        <span class="chk-count" id="branches-count">0 selected</span>
+      </div>
+      <div class="chk-list">
+        {% for b in branches %}
+        <label class="chk-item"><input type="checkbox" value="{{ b }}" onchange="updateCount('branches')"><span>{{ b }}</span></label>
+        {% endfor %}
+      </div>
+    </div>
+    <span class="s-hint">Tick one or more branches.</span>
+
+    <label class="s-label">Quota</label>
+    <select id="quota">
+      <option>All Quotas</option>
+      {% for q in quotas %}<option>{{ q }}</option>{% endfor %}
+    </select>
+
+    <label class="s-label">District (select one or more) <span class="q2" title="Tick at least one branch or district to generate the list.">?</span></label>
+    <div class="chk-group" id="districts">
+      <input type="text" class="chk-search" placeholder="Search districts…" oninput="filterChecks('districts', this.value)">
+      <div class="chk-tools">
+        <button type="button" onclick="setAllChecks('districts', true)">Select all</button>
+        <button type="button" onclick="setAllChecks('districts', false)">Clear</button>
+        <span class="chk-count" id="districts-count">0 selected</span>
+      </div>
+      <div class="chk-list">
+        {% for d in districts %}
+        <label class="chk-item"><input type="checkbox" value="{{ d }}" onchange="updateCount('districts')"><span>{{ d }}</span></label>
+        {% endfor %}
+      </div>
+    </div>
+    <span class="s-hint">Tick one or more districts.</span>
+
+    <button class="btn-predict" onclick="showList()">📋 Show College List</button>
+  </aside>
+
+  <main class="main">
+    <h1 class="d-title">🎓 MH-CET College List</h1>
+    <p class="d-sub">Select Gender, Category, Branch, Quota and District — the matching colleges are listed top to bottom by cutoff.</p>
+
+    <div id="info" class="d-info">Set your filters in the sidebar, then click <b>Show College List</b>. Tick at least one Branch or District.</div>
+    <div id="loading" class="d-info" style="display:none">Building your college list…</div>
+    <div id="error" class="d-warn" style="display:none"></div>
+
+    <div id="results" style="display:none">
+      <div class="metric-row">
+        <div class="metric"><span>Total Options</span><b id="m-total"></b></div>
+        <div class="metric"><span>Priority Options</span><b id="m-prio"></b></div>
+        <div class="metric"><span>Institutes</span><b id="m-inst"></b></div>
+        <div class="metric"><span>Districts Covered</span><b id="m-dist"></b></div>
+      </div>
+      <div class="d-table-wrap">
+        <table class="d-table">
+          <thead><tr>
+            <th></th><th>Priority</th><th>Institute Code</th><th>Institute Name</th>
+            <th>District</th><th>Course Name</th><th>Category</th><th>Quota</th>
+            <th>Cutoff Percentile</th><th>Cutoff Rank</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <button class="btn-predict wide" onclick="downloadListPdf()">📄 Download PDF Report</button>
+    </div>
+  </main>
+</div>
+
+<script>
+function multi(id){
+  return [...document.querySelectorAll('#'+id+' input[type=checkbox]:checked')].map(c=>c.value);
+}
+function updateCount(id){
+  const n = document.querySelectorAll('#'+id+' input[type=checkbox]:checked').length;
+  document.getElementById(id+'-count').textContent = n + ' selected';
+}
+function setAllChecks(id, state){
+  document.querySelectorAll('#'+id+' .chk-item').forEach(item => {
+    if (item.style.display !== 'none') item.querySelector('input').checked = state;
+  });
+  updateCount(id);
+}
+function filterChecks(id, q){
+  q = q.trim().toLowerCase();
+  document.querySelectorAll('#'+id+' .chk-item').forEach(item => {
+    const txt = item.textContent.trim().toLowerCase();
+    item.style.display = txt.includes(q) ? 'flex' : 'none';
+  });
+}
+function payload(){
+  return {
+    gender: document.getElementById('gender').value,
+    category: document.getElementById('category').value,
+    branches: multi('branches'),
+    quota: document.getElementById('quota').value,
+    districts: multi('districts')
+  };
+}
+async function showList(){
+  const err = document.getElementById('error'), res = document.getElementById('results');
+  document.getElementById('info').style.display='none';
+  err.style.display='none'; res.style.display='none';
+  document.getElementById('loading').style.display='block';
+  const r = await fetch('/api/college-list', {method:'POST',
+    headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload())});
+  const out = await r.json();
+  document.getElementById('loading').style.display='none';
+  if (out.error){ err.textContent = out.error; err.style.display='block'; return; }
+  if (!out.results.length){
+    err.textContent = 'No colleges found for these filters. Try a different category, branch, quota, or district.';
+    err.style.display='block'; return;
+  }
+  document.getElementById('m-total').textContent = out.results.length;
+  document.getElementById('m-prio').textContent = out.priority_count;
+  document.getElementById('m-inst').textContent = out.institute_count;
+  document.getElementById('m-dist').textContent = out.district_count;
+  const tb = document.querySelector('.d-table tbody'); tb.innerHTML='';
+  out.results.forEach((x, i) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td class="idx">${i+1}</td>
+      <td class="star">${x.priority ? '⭐' : ''}</td>
+      <td>${x.code}</td>
+      <td class="inst">${x.institute}</td>
+      <td>${x.district}</td>
+      <td>${x.course}</td>
+      <td>${x.seat_code}</td>
+      <td class="quota">${x.quota}</td>
+      <td>${x.cutoff_pct.toFixed(4)}</td>
+      <td>${x.cutoff_rank ? x.cutoff_rank.toLocaleString() : '-'}</td>`;
+    tb.appendChild(tr);
+  });
+  res.style.display='block';
+}
+async function downloadListPdf(){
+  const r = await fetch('/api/college-list-report', {method:'POST',
+    headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload())});
+  if (!r.ok){ alert('Could not generate PDF.'); return; }
+  const blob = await r.blob();
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'MHCET_College_List.pdf';
+  a.click();
+}
+</script>
+{% endblock %}

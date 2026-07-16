@@ -317,6 +317,67 @@ def run_prediction(form):
             "results": results}
 
 
+def run_college_list(form):
+    """Filter-only college list (no percentile/rank input).
+
+    Returns colleges matching gender/category/branch/quota/district,
+    sorted top-to-bottom by cutoff percentile (best first).
+    """
+    df = load_data()
+    priority_codes = [int(c) for c in get_setting("priority_codes")]
+
+    branches = form.get("branches") or []
+    districts = form.get("districts") or []
+    if not branches and not districts:
+        return {"error": "Select at least one Branch or District "
+                         "to generate the college list."}
+
+    d = df[df["Base Category"] == form.get("category", "OPEN")]
+
+    gender = form.get("gender", "Gender-Neutral")
+    if gender != "Any":
+        if gender == "Female (Ladies)":
+            d = d[d["Gender"].isin(
+                ["Female (Ladies)", "Gender-Neutral", "Any"])]
+        else:
+            d = d[d["Gender"].isin([gender, "Any"])]
+
+    quota = form.get("quota", "All Quotas")
+    if branches:
+        d = d[d["Course Name"].isin(branches)]
+    if quota != "All Quotas":
+        d = d[d["Level"] == quota]
+    if districts:
+        d = d[d["District"].isin(districts)]
+
+    if d.empty:
+        return {"results": [], "priority_count": 0,
+                "institute_count": 0, "district_count": 0}
+
+    # top-to-bottom: highest cutoff percentile first
+    d = d.sort_values("Cutoff Percentile", ascending=False).copy()
+
+    results = []
+    for _, r in d.iterrows():
+        results.append({
+            "priority": bool(int(r["Institute Code"]) in priority_codes),
+            "code": int(r["Institute Code"]),
+            "institute": str(r["Institute Name"]),
+            "district": str(r["District"]),
+            "course": str(r["Course Name"]),
+            "seat_code": str(r["Category"]),
+            "quota": str(r["Level"]),
+            "cutoff_pct": round(float(r["Cutoff Percentile"]), 4),
+            "cutoff_rank": (int(r["Cutoff Rank"])
+                            if pd.notna(r["Cutoff Rank"]) else None),
+        })
+
+    return {"results": results,
+            "priority_count": sum(1 for r in results if r["priority"]),
+            "institute_count": int(d["Institute Name"].nunique()),
+            "district_count": int(d["District"].nunique())}
+
+
 # ----------------------------------------------------------------- auth
 def login_required(fn):
     @wraps(fn)
@@ -506,6 +567,142 @@ def build_pdf(out, payload):
         Paragraph(
             f"{out['counter_label']}: <b>{out['counter_value']}</b> | "
             f"Options: <b>{len(out['results'])}</b> | "
+            f"Generated: {datetime.now().strftime('%d %b %Y, %I:%M %p')} | "
+            f"* = priority institute", styles["Normal"]),
+        Spacer(1, 6 * mm)]
+
+    headers = ["Sr.No", "Institute Code", "Institute Name", "District",
+               "Course Name", "Quota", "Cutoff Percentile", "Cutoff Rank",
+               "College Number"]
+    data = [[Paragraph(h, head) for h in headers]]
+    for i, r in enumerate(out["results"], 1):
+        star = "* " if r["priority"] else ""
+        data.append([
+            Paragraph(str(i), cell),
+            Paragraph(str(r["code"]), cell),
+            Paragraph(star + r["institute"], cell),
+            Paragraph(r["district"], cell),
+            Paragraph(r["course"], cell),
+            Paragraph(r["quota"], cell),
+            Paragraph(f"{r['cutoff_pct']:.4f}", cell),
+            Paragraph(f"{r['cutoff_rank']:,}" if r["cutoff_rank"] else "-",
+                      cell),
+            Paragraph("", cell)])   # College Number - left blank to fill in
+    table = Table(data, colWidths=[11 * mm, 17 * mm, 62 * mm, 23 * mm,
+                                   51 * mm, 40 * mm, 20 * mm, 20 * mm,
+                                   25 * mm],
+                  repeatRows=1)
+    cmds = [("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1f4e79")),
+            ("GRID", (0, 0), (-1, -1), 0.4, colors.grey),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1),
+             [colors.white, colors.HexColor("#eef3f8")])]
+    for i, r in enumerate(out["results"], 1):
+        if r["priority"]:
+            cmds.append(("BACKGROUND", (0, i), (-1, i),
+                         colors.HexColor("#fff3cd")))
+    table.setStyle(TableStyle(cmds))
+    story.append(table)
+    doc.build(story)
+    return buf.getvalue()
+
+
+# ------------------------------------------------------ college list page
+@app.route("/college-list")
+@login_required
+def college_list():
+    df = load_data()
+    return render_template(
+        "college_list.html",
+        categories=sorted(df["Base Category"].unique()),
+        branches=sorted(df["Course Name"].dropna().unique()),
+        quotas=sorted(df["Level"].dropna().unique()),
+        districts=sorted(df["District"].dropna().unique()))
+
+
+@app.route("/api/college-list", methods=["POST"])
+@login_required
+def api_college_list():
+    payload = request.get_json(force=True)
+    return jsonify(run_college_list(payload))
+
+
+@app.route("/api/college-list-report", methods=["POST"])
+@login_required
+def api_college_list_report():
+    payload = request.get_json(force=True)
+    out = run_college_list(payload)
+    if out.get("error") or not out.get("results"):
+        return jsonify({"error": out.get("error",
+                                         "No results to export.")}), 400
+    pdf = build_list_pdf(out, payload)
+    fname = f"MHCET_College_List_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+    return send_file(io.BytesIO(pdf), mimetype="application/pdf",
+                     as_attachment=True, download_name=fname)
+
+
+def build_list_pdf(out, payload):
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=landscape(A4),
+                            leftMargin=12 * mm, rightMargin=12 * mm,
+                            topMargin=12 * mm, bottomMargin=12 * mm)
+    styles = getSampleStyleSheet()
+    cell = ParagraphStyle("cell", parent=styles["Normal"], fontSize=7.5,
+                          leading=9)
+    head = ParagraphStyle("head", parent=styles["Normal"], fontSize=8,
+                          leading=10, textColor=colors.white,
+                          fontName="Helvetica-Bold")
+
+    # ---- selection details block: Gender / Category / Quota /
+    #      Branches / Districts ----
+    gender = payload.get("gender") or "-"
+    category = payload.get("category") or "-"
+    quota = payload.get("quota") or "All Quotas"
+    branches = payload.get("branches") or []
+    districts = payload.get("districts") or []
+
+    def _join_limited(items, all_label, max_items=12):
+        if not items:
+            return all_label
+        if len(items) <= max_items:
+            return ", ".join(items)
+        return (", ".join(items[:max_items])
+                + f" … (+{len(items) - max_items} more)")
+
+    branches_txt = _join_limited(branches, "All Branches")
+    districts_txt = _join_limited(districts, "All Districts")
+
+    lbl = ParagraphStyle("lbl", parent=styles["Normal"], fontSize=9,
+                         leading=11, fontName="Helvetica-Bold",
+                         textColor=colors.HexColor("#1f4e79"))
+    val = ParagraphStyle("val", parent=styles["Normal"], fontSize=9,
+                         leading=11)
+    details = Table([
+        [Paragraph("Gender", lbl), Paragraph(gender, val),
+         Paragraph("Category", lbl), Paragraph(category, val)],
+        [Paragraph("Quota", lbl), Paragraph(quota, val),
+         Paragraph("Total Colleges", lbl),
+         Paragraph(str(len(out["results"])), val)],
+        [Paragraph("Branches", lbl), Paragraph(branches_txt, val),
+         Paragraph("Districts", lbl), Paragraph(districts_txt, val)],
+    ], colWidths=[28 * mm, 92 * mm, 30 * mm, 65 * mm])
+    details.setStyle(TableStyle([
+        ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#c9d6e5")),
+        ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#eef3f8")),
+        ("BACKGROUND", (2, 0), (2, -1), colors.HexColor("#eef3f8")),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+    ]))
+
+    story = [
+        Paragraph("MHT-CET College List Report", styles["Title"]),
+        Spacer(1, 3 * mm),
+        details,
+        Spacer(1, 4 * mm),
+        Paragraph(
+            f"Sorted top-to-bottom by cutoff percentile (best first) | "
             f"Generated: {datetime.now().strftime('%d %b %Y, %I:%M %p')} | "
             f"* = priority institute", styles["Normal"]),
         Spacer(1, 6 * mm)]

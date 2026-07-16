@@ -16,6 +16,7 @@
     <div class="nav-links">
       <a href="{{ url_for('features') }}">Features</a>
       <a href="{{ url_for('predictor') }}">Predictor</a>
+      <a href="{{ url_for('college_list') }}">College List</a>
       {% if session.get('role') == 'admin' %}<a href="{{ url_for('admin') }}">Admin</a>{% endif %}
       <span class="nav-user">{{ session.get('name') }}</span>
       <a class="btn-outline" href="{{ url_for('logout') }}">Logout</a>

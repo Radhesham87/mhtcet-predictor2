@@ -354,10 +354,15 @@ def run_college_list(form):
         return {"results": [], "priority_count": 0,
                 "institute_count": 0, "district_count": 0}
 
+<<<<<<< HEAD
     # top-to-bottom (best college first) ordered by the dataset's
     # cutoff percentile, then by cutoff rank as a tie-breaker
     d = d.sort_values(["Cutoff Percentile", "Cutoff Rank"],
                       ascending=[False, True], na_position="last").copy()
+=======
+    # top-to-bottom: highest cutoff percentile first
+    d = d.sort_values("Cutoff Percentile", ascending=False).copy()
+>>>>>>> e43281de2fdd9fe8e5a8b5f201c4b57101cbff8c
 
     results = []
     for _, r in d.iterrows():

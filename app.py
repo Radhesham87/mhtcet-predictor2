@@ -406,6 +406,11 @@ def load_jee_data() -> pd.DataFrame:
     df = df[df["Branch Name"].astype(str).str.strip() != "-"]
     df["Branch Name"] = df["Branch Name"].astype(str).str.strip()
     df["College Name"] = df["College Name"].astype(str).str.strip()
+    if "District" in df.columns:
+        df["District"] = df["District"].astype(str).str.strip()
+        df.loc[df["District"].isin(["nan", "None", ""]), "District"] = ""
+    else:
+        df["District"] = ""
     _JEE_CACHE.update({"path": JEE_DATA, "mtime": mtime, "df": df})
     return df
 
@@ -450,9 +455,12 @@ def run_jee_prediction(form):
         counter_value = f"~{est:,}" if est else "N/A"
 
     branches = form.get("branches") or []
+    districts = form.get("districts") or []
     d = df
     if branches:
         d = d[d["Branch Name"].isin(branches)]
+    if districts:
+        d = d[d["District"].isin(districts)]
 
     lo, hi = percentile - JEE_PCT_BELOW, percentile + JEE_PCT_ABOVE
     d = d[d["Percentile"].between(lo, hi)].copy()
@@ -479,6 +487,7 @@ def run_jee_prediction(form):
         results.append({
             "code": int(r["College Code"]),
             "college": str(r["College Name"]),
+            "district": str(r["District"]) if r["District"] else "-",
             "branch": str(r["Branch Name"]),
             "cutoff_pct": round(float(r["Percentile"]), 4),
             "cutoff_rank": int(r["Merit"]),
@@ -866,7 +875,10 @@ def jee_predictor():
     df = load_jee_data()
     branches = (sorted(df["Branch Name"].dropna().unique())
                 if not df.empty else [])
-    return render_template("jee_predictor.html", branches=branches)
+    districts = (sorted(x for x in df["District"].dropna().unique() if x)
+                 if not df.empty else [])
+    return render_template("jee_predictor.html",
+                           branches=branches, districts=districts)
 
 
 @app.route("/api/jee-predict", methods=["POST"])
@@ -920,6 +932,11 @@ def build_jee_pdf(out, payload):
                     + (f" … (+{len(branches) - 10} more)"
                        if len(branches) > 10 else "")) if branches \
         else "All Branches"
+    districts = payload.get("districts") or []
+    districts_txt = (", ".join(districts[:10])
+                     + (f" … (+{len(districts) - 10} more)"
+                        if len(districts) > 10 else "")) if districts \
+        else "All Districts"
 
     lbl = ParagraphStyle("lbl", parent=styles["Normal"], fontSize=9,
                          leading=11, fontName="Helvetica-Bold",
@@ -932,6 +949,9 @@ def build_jee_pdf(out, payload):
         [Paragraph("Branches", lbl), Paragraph(branches_txt, val),
          Paragraph(out["counter_label"], lbl),
          Paragraph(str(out["counter_value"]), val)],
+        [Paragraph("Districts", lbl), Paragraph(districts_txt, val),
+         Paragraph("Options", lbl),
+         Paragraph(str(len(out["results"])), val)],
     ], colWidths=[24 * mm, 78 * mm, 32 * mm, 48 * mm])
     details.setStyle(TableStyle([
         ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#c9d6e5")),
@@ -956,20 +976,22 @@ def build_jee_pdf(out, payload):
             styles["Normal"]),
         Spacer(1, 6 * mm)]
 
-    headers = ["Sr.No", "College Code", "College Name", "Branch Name",
-               "Cutoff Percentile", "Merit Rank", "College Type"]
+    headers = ["Sr.No", "College Code", "College Name", "District",
+               "Branch Name", "Cutoff Percentile", "Merit Rank",
+               "College Type"]
     data = [[Paragraph(h, head) for h in headers]]
     for i, r in enumerate(out["results"], 1):
         data.append([
             Paragraph(str(i), cell),
             Paragraph(str(r["code"]), cell),
             Paragraph(r["college"], cell),
+            Paragraph(r.get("district", "-"), cell),
             Paragraph(r["branch"], cell),
             Paragraph(f"{r['cutoff_pct']:.4f}", cell),
             Paragraph(f"{r['cutoff_rank']:,}", cell),
             Paragraph(r["college_type"], cell)])
-    table = Table(data, colWidths=[12 * mm, 20 * mm, 56 * mm, 46 * mm,
-                                   22 * mm, 18 * mm, 22 * mm],
+    table = Table(data, colWidths=[10 * mm, 18 * mm, 48 * mm, 22 * mm,
+                                   40 * mm, 20 * mm, 16 * mm, 20 * mm],
                   repeatRows=1)
     type_bg = {"Dream College": colors.HexColor("#fde2e1"),
                "Target College": colors.HexColor("#fff3cd"),
@@ -978,7 +1000,7 @@ def build_jee_pdf(out, payload):
             ("GRID", (0, 0), (-1, -1), 0.4, colors.grey),
             ("VALIGN", (0, 0), (-1, -1), "TOP")]
     for i, r in enumerate(out["results"], 1):
-        cmds.append(("BACKGROUND", (6, i), (6, i),
+        cmds.append(("BACKGROUND", (7, i), (7, i),
                      type_bg.get(r["college_type"], colors.white)))
     table.setStyle(TableStyle(cmds))
     story.append(table)

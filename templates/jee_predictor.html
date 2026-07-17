@@ -37,6 +37,22 @@
     </div>
     <span class="s-hint">Empty = All Branches. Tick one or more.</span>
 
+    <label class="s-label">District (select one or more) <span class="q2" title="Leave empty to include all districts.">?</span></label>
+    <div class="chk-group" id="districts">
+      <input type="text" class="chk-search" placeholder="Search districts…" oninput="filterChecks('districts', this.value)">
+      <div class="chk-tools">
+        <button type="button" onclick="setAllChecks('districts', true)">Select all</button>
+        <button type="button" onclick="setAllChecks('districts', false)">Clear</button>
+        <span class="chk-count" id="districts-count">0 selected</span>
+      </div>
+      <div class="chk-list">
+        {% for d in districts %}
+        <label class="chk-item"><input type="checkbox" value="{{ d }}" onchange="updateCount('districts')"><span>{{ d }}</span></label>
+        {% endfor %}
+      </div>
+    </div>
+    <span class="s-hint">Empty = All Districts. Tick one or more.</span>
+
     <button class="btn-predict" onclick="predict()">🔍 Predict Colleges</button>
   </aside>
 
@@ -58,8 +74,8 @@
         <table class="d-table">
           <thead><tr>
             <th></th><th>College Code</th><th>College Name</th>
-            <th>Branch Name</th><th>Cutoff Percentile</th><th>Merit Rank</th>
-            <th>College Type</th>
+            <th>District</th><th>Branch Name</th><th>Cutoff Percentile</th>
+            <th>Merit Rank</th><th>College Type</th>
           </tr></thead>
           <tbody></tbody>
         </table>
@@ -110,7 +126,8 @@ function payload(){
     name: document.getElementById('student-name').value,
     mode: document.querySelector('input[name=mode]:checked').value,
     value: document.getElementById('value').value,
-    branches: multi('branches')
+    branches: multi('branches'),
+    districts: multi('districts')
   };
 }
 const TYPE_COLORS = {"Dream College":"#ef5350","Target College":"#ffb74d","Safe College":"#66bb6a"};
@@ -139,6 +156,7 @@ async function predict(){
     tr.innerHTML = `<td class="idx">${i+1}</td>
       <td>${x.code}</td>
       <td class="inst">${x.college}</td>
+      <td>${x.district}</td>
       <td>${x.branch}</td>
       <td>${x.cutoff_pct.toFixed(4)}</td>
       <td>${x.cutoff_rank.toLocaleString()}</td>
